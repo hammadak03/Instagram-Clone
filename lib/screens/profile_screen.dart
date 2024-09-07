@@ -1,9 +1,12 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-
+import 'package:image_picker/image_picker.dart';
 import '../resources/auth_methods.dart';
 import '../resources/firestore_methods.dart';
+import '../resources/storage_methods.dart';
 import '../utils/colors.dart';
 import '../utils/utils.dart';
 import '../widgets/follow_button.dart';
@@ -24,11 +27,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int following = 0;
   bool isFollowing = false;
   bool isLoading = false;
+  bool isFriendRequestSent = false;
+  bool isFriendRequestReceived = false;
+  bool isFriend = false; // New variable to check if the user is a friend
+  Uint8List? _imageFile;
+  final ImagePicker _picker = ImagePicker();
+  String requestId = '';
 
   @override
   void initState() {
     super.initState();
     getData();
+    checkFriendRequestStatus();
   }
 
   getData() async {
@@ -41,7 +51,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           .doc(widget.uid)
           .get();
 
-      // get post lENGTH
       var postSnap = await FirebaseFirestore.instance
           .collection('posts')
           .where('uid', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
@@ -54,10 +63,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       isFollowing = userSnap
           .data()!['followers']
           .contains(FirebaseAuth.instance.currentUser!.uid);
+
+      // Check if the current user is a friend of the profile user
+      isFriend = userSnap
+          .data()!['followers']
+          .contains(FirebaseAuth.instance.currentUser!.uid);
+
       setState(() {});
     } catch (e) {
       showSnackBar(
-        // ignore: use_build_context_synchronously
         context,
         e.toString(),
       );
@@ -65,6 +79,173 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       isLoading = false;
     });
+  }
+
+  checkFriendRequestStatus() async {
+    // Check if a friend request has been sent
+    var requestSnap = await FirebaseFirestore.instance
+        .collection('friend_requests')
+        .where('senderId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
+        .where('receiverId', isEqualTo: widget.uid)
+        .where('status', isEqualTo: 'pending')
+        .get();
+
+    if (requestSnap.docs.isNotEmpty) {
+      setState(() {
+        isFriendRequestSent = true;
+        requestId = requestSnap.docs.first.id;
+      });
+    }
+
+    // Check if a friend request has been received
+    var receivedSnap = await FirebaseFirestore.instance
+        .collection('friend_requests')
+        .where('receiverId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
+        .where('senderId', isEqualTo: widget.uid)
+        .where('status', isEqualTo: 'pending')
+        .get();
+
+    if (receivedSnap.docs.isNotEmpty) {
+      setState(() {
+        isFriendRequestReceived = true;
+        requestId = receivedSnap.docs.first.id;
+      });
+    }
+  }
+
+  Future<void> _selectImage() async {
+    XFile? file = await _picker.pickImage(source: ImageSource.gallery);
+    if (file != null) {
+      setState(() {
+        _imageFile = Uint8List.fromList(File(file.path).readAsBytesSync());
+      });
+    }
+  }
+
+  Future<void> _editProfile() async {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        final TextEditingController _usernameController =
+            TextEditingController(text: userData['username']);
+        final TextEditingController _bioController =
+            TextEditingController(text: userData['bio']);
+        return AlertDialog(
+          title: const Text('Edit Profile'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_imageFile != null)
+                CircleAvatar(
+                  backgroundImage: MemoryImage(_imageFile!),
+                  radius: 50,
+                ),
+              TextButton(
+                onPressed: _selectImage,
+                child: const Text('Change Profile Picture'),
+              ),
+              TextField(
+                controller: _usernameController,
+                decoration: const InputDecoration(labelText: 'Username'),
+              ),
+              TextField(
+                controller: _bioController,
+                decoration: const InputDecoration(labelText: 'Bio'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                String photoUrl = userData['photoUrl'];
+                if (_imageFile != null) {
+                  photoUrl = await StorageMethods().uploadImageToStorage(
+                    'profile_pics',
+                    _imageFile!,
+                    false,
+                  );
+                }
+                String res = await FireStoreMethods().updateUserProfile(
+                  FirebaseAuth.instance.currentUser!.uid,
+                  _usernameController.text,
+                  _bioController.text,
+                  photoUrl,
+                );
+                if (res == 'success') {
+                  Navigator.pop(context);
+                  getData(); // Refresh data
+                } else {
+                  showSnackBar(context, res);
+                }
+              },
+              child: const Text('Save'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _sendFriendRequest() async {
+    String res = await FireStoreMethods().sendFriendRequest(
+      FirebaseAuth.instance.currentUser!.uid,
+      widget.uid,
+    );
+    if (res == 'success') {
+      setState(() {
+        isFriendRequestSent = true;
+      });
+      showSnackBar(context, 'Friend request sent.');
+    } else {
+      showSnackBar(context, res);
+    }
+  }
+
+  Future<void> _acceptFriendRequest() async {
+    String res = await FireStoreMethods().acceptFriendRequest(requestId);
+    if (res == 'success') {
+      setState(() {
+        isFriendRequestReceived = false;
+        isFriend = true;
+        followers++;
+      });
+      showSnackBar(context, 'Friend request accepted.');
+    } else {
+      showSnackBar(context, res);
+    }
+  }
+
+  Future<void> _rejectFriendRequest() async {
+    String res = await FireStoreMethods().rejectFriendRequest(requestId);
+    if (res == 'success') {
+      setState(() {
+        isFriendRequestReceived = false;
+      });
+      showSnackBar(context, 'Friend request rejected.');
+    } else {
+      showSnackBar(context, res);
+    }
+  }
+
+  Future<void> _removeFriend() async {
+    String res = await FireStoreMethods().removeFriend(
+      FirebaseAuth.instance.currentUser!.uid,
+      widget.uid,
+    );
+    if (res == 'success') {
+      setState(() {
+        isFollowing = false;
+        isFriend = false;
+        followers--;
+      });
+      showSnackBar(context, 'Friend removed.');
+    } else {
+      showSnackBar(context, res);
+    }
   }
 
   @override
@@ -80,6 +261,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 userData['username'],
               ),
               centerTitle: false,
+              actions: [
+                FirebaseAuth.instance.currentUser!.uid == widget.uid
+                    ? IconButton(
+                        icon: const Icon(Icons.edit),
+                        onPressed: _editProfile,
+                      )
+                    : Container()
+              ],
             ),
             body: ListView(
               children: [
@@ -135,45 +324,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               }
                                             },
                                           )
-                                        : isFollowing
-                                            ? FollowButton(
-                                                text: 'Unfollow',
-                                                backgroundColor: Colors.white,
-                                                textColor: Colors.black,
-                                                borderColor: Colors.grey,
-                                                function: () async {
-                                                  await FireStoreMethods()
-                                                      .followUser(
-                                                    FirebaseAuth.instance
-                                                        .currentUser!.uid,
-                                                    userData['uid'],
-                                                  );
-
-                                                  setState(() {
-                                                    isFollowing = false;
-                                                    followers--;
-                                                  });
-                                                },
+                                        : isFriendRequestReceived
+                                            ? Row(
+                                                children: [
+                                                  FollowButton(
+                                                    text: 'Accept',
+                                                    backgroundColor:
+                                                        Colors.green,
+                                                    textColor: Colors.white,
+                                                    borderColor: Colors.green,
+                                                    function:
+                                                        _acceptFriendRequest,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  FollowButton(
+                                                    text: 'Reject',
+                                                    backgroundColor: Colors.red,
+                                                    textColor: Colors.white,
+                                                    borderColor: Colors.red,
+                                                    function:
+                                                        _rejectFriendRequest,
+                                                  ),
+                                                ],
                                               )
-                                            : FollowButton(
-                                                text: 'Follow',
-                                                backgroundColor: Colors.blue,
-                                                textColor: Colors.white,
-                                                borderColor: Colors.blue,
-                                                function: () async {
-                                                  await FireStoreMethods()
-                                                      .followUser(
-                                                    FirebaseAuth.instance
-                                                        .currentUser!.uid,
-                                                    userData['uid'],
-                                                  );
-
-                                                  setState(() {
-                                                    isFollowing = true;
-                                                    followers++;
-                                                  });
-                                                },
-                                              )
+                                            : isFriendRequestSent
+                                                ? FollowButton(
+                                                    text: 'Request Sent',
+                                                    backgroundColor:
+                                                        Colors.grey,
+                                                    textColor: Colors.white,
+                                                    borderColor: Colors.grey,
+                                                    function: () {},
+                                                  )
+                                                : isFriend
+                                                    ? FollowButton(
+                                                        text: 'Unfollow',
+                                                        backgroundColor:
+                                                            Colors.white,
+                                                        textColor: Colors.black,
+                                                        borderColor:
+                                                            Colors.grey,
+                                                        function: _removeFriend,
+                                                      )
+                                                    : FollowButton(
+                                                        text: 'Follow',
+                                                        backgroundColor:
+                                                            Colors.blue,
+                                                        textColor: Colors.white,
+                                                        borderColor:
+                                                            Colors.blue,
+                                                        function:
+                                                            _sendFriendRequest,
+                                                      ),
                                   ],
                                 ),
                               ],

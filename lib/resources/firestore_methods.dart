@@ -8,14 +8,42 @@ import 'storage_methods.dart';
 class FireStoreMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  Future<String> uploadPost(String description, Uint8List file, String uid,
-      String username, String profImage) async {
-    // asking uid here because we dont want to make extra calls to firebase auth when we can just get from our state management
+  // Future<String> uploadPost(String description, Uint8List file, String uid,
+  //     String username, String profImage) async {
+  //   // asking uid here because we dont want to make extra calls to firebase auth when we can just get from our state management
+  //   String res = "Some error occurred";
+  //   try {
+  //     String photoUrl =
+  //         await StorageMethods().uploadImageToStorage('posts', file, true);
+  //     String postId = const Uuid().v1(); // creates unique id based on time
+  //     Post post = Post(
+  //       description: description,
+  //       uid: uid,
+  //       username: username,
+  //       likes: [],
+  //       postId: postId,
+  //       datePublished: DateTime.now(),
+  //       postUrl: photoUrl,
+  //       profImage: profImage,
+  //     );
+  //     _firestore.collection('posts').doc(postId).set(post.toJson());
+  //     res = "success";
+  //   } catch (err) {
+  //     res = err.toString();
+  //   }
+  //   return res;
+  // }
+  Future<String> uploadPost(
+    String description,
+    String mediaUrl,
+    String uid,
+    String username,
+    String profImage,
+    String mediaType, // Added mediaType parameter
+  ) async {
     String res = "Some error occurred";
     try {
-      String photoUrl =
-          await StorageMethods().uploadImageToStorage('posts', file, true);
-      String postId = const Uuid().v1(); // creates unique id based on time
+      String postId = const Uuid().v1();
       Post post = Post(
         description: description,
         uid: uid,
@@ -23,8 +51,9 @@ class FireStoreMethods {
         likes: [],
         postId: postId,
         datePublished: DateTime.now(),
-        postUrl: photoUrl,
+        postUrl: mediaUrl,
         profImage: profImage,
+        mediaType: mediaType, // Added mediaType field
       );
       _firestore.collection('posts').doc(postId).set(post.toJson());
       res = "success";
@@ -32,6 +61,25 @@ class FireStoreMethods {
       res = err.toString();
     }
     return res;
+  }
+
+  //update user profile
+  Future<String> updateUserProfile(
+    String uid,
+    String username,
+    String bio,
+    String photoUrl,
+  ) async {
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'username': username,
+        'bio': bio,
+        'photoUrl': photoUrl,
+      });
+      return 'success';
+    } catch (e) {
+      return e.toString();
+    }
   }
 
   Future<String> likePost(String postId, String uid, List likes) async {
@@ -49,6 +97,20 @@ class FireStoreMethods {
         });
       }
       res = 'success';
+    } catch (err) {
+      res = err.toString();
+    }
+    return res;
+  }
+
+  // update posts
+  Future<String> updatePost(String postId, String newDescription) async {
+    String res = "Some error occurred";
+    try {
+      await _firestore.collection('posts').doc(postId).update({
+        'description': newDescription,
+      });
+      res = "success";
     } catch (err) {
       res = err.toString();
     }
@@ -123,6 +185,81 @@ class FireStoreMethods {
       }
     } catch (e) {
       if (kDebugMode) print(e.toString());
+    }
+  }
+
+  Future<String> sendFriendRequest(String senderId, String receiverId) async {
+    try {
+      await _firestore.collection('friend_requests').add({
+        'senderId': senderId,
+        'receiverId': receiverId,
+        'status': 'pending',
+      });
+      return 'success';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  Future<String> acceptFriendRequest(String requestId) async {
+    try {
+      var requestDoc =
+          await _firestore.collection('friend_requests').doc(requestId).get();
+      var senderId = requestDoc['senderId'];
+      var receiverId = requestDoc['receiverId'];
+
+      // Update request status to accepted
+      await _firestore.collection('friend_requests').doc(requestId).update({
+        'status': 'accepted',
+      });
+
+      // Add to followers list
+      await _firestore
+          .collection('followers')
+          .doc(senderId)
+          .collection('following')
+          .doc(receiverId)
+          .set({});
+      await _firestore
+          .collection('followers')
+          .doc(receiverId)
+          .collection('followers')
+          .doc(senderId)
+          .set({});
+
+      return 'success';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  Future<String> rejectFriendRequest(String requestId) async {
+    try {
+      await _firestore.collection('friend_requests').doc(requestId).delete();
+      return 'success';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  Future<String> removeFriend(String userId, String friendId) async {
+    try {
+      // Remove from followers and following lists
+      await _firestore
+          .collection('followers')
+          .doc(userId)
+          .collection('following')
+          .doc(friendId)
+          .delete();
+      await _firestore
+          .collection('followers')
+          .doc(friendId)
+          .collection('followers')
+          .doc(userId)
+          .delete();
+      return 'success';
+    } catch (e) {
+      return e.toString();
     }
   }
 }

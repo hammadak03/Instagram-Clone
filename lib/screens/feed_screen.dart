@@ -43,9 +43,11 @@ class _FeedScreenState extends State<FeedScreen> {
                     );
                   }).toList(),
                   onChanged: (String? newValue) {
-                    setState(() {
-                      selectedFilter = newValue!;
-                    });
+                    if (newValue != null) {
+                      setState(() {
+                        selectedFilter = newValue;
+                      });
+                    }
                   },
                 ),
               ],
@@ -54,26 +56,49 @@ class _FeedScreenState extends State<FeedScreen> {
         children: [
           // StreamBuilder for posts based on the selected filter
           Expanded(
-            child: StreamBuilder(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: getFilteredPostsStream(),
-              builder: (context,
-                  AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot) {
+              builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(
                     child: CircularProgressIndicator(),
                   );
                 }
+
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Text('Error: ${snapshot.error}'),
+                  );
+                }
+
+                if (!snapshot.hasData ||
+                    snapshot.data == null ||
+                    snapshot.data!.docs.isEmpty) {
+                  return const Center(
+                    child: Text('No posts available.'),
+                  );
+                }
+
                 return ListView.builder(
                   itemCount: snapshot.data!.docs.length,
-                  itemBuilder: (ctx, index) => Container(
-                    margin: EdgeInsets.symmetric(
-                      horizontal: width > webScreenSize ? width * 0.3 : 0,
-                      vertical: width > webScreenSize ? 15 : 0,
-                    ),
-                    child: PostCard(
-                      snap: snapshot.data!.docs[index].data(),
-                    ),
-                  ),
+                  itemBuilder: (ctx, index) {
+                    final postData = snapshot.data!.docs[index].data();
+                    if (postData == null) {
+                      return const Center(
+                        child: Text('Error: Post data is null.'),
+                      );
+                    }
+
+                    return Container(
+                      margin: EdgeInsets.symmetric(
+                        horizontal: width > webScreenSize ? width * 0.3 : 0,
+                        vertical: width > webScreenSize ? 15 : 0,
+                      ),
+                      child: PostCard(
+                        snap: postData,
+                      ),
+                    );
+                  },
                 );
               },
             ),
@@ -85,12 +110,17 @@ class _FeedScreenState extends State<FeedScreen> {
 
   // Function to get posts stream based on the selected filter
   Stream<QuerySnapshot<Map<String, dynamic>>> getFilteredPostsStream() {
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+    if (currentUserId == null) {
+      return Stream.error('User not logged in');
+    }
+
     if (selectedFilter == 'Discover') {
       // Get all posts (Discover)
       return FirebaseFirestore.instance.collection('posts').snapshots();
     } else {
       // Get only current user's posts (My Posts)
-      String currentUserId = FirebaseAuth.instance.currentUser!.uid;
       return FirebaseFirestore.instance
           .collection('posts')
           .where('uid', isEqualTo: currentUserId)
